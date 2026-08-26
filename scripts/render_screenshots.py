@@ -46,7 +46,7 @@ def main() -> None:
     decision = decide_experiment(
         results, srm_flag=data.srm_flag, srm_pvalue=data.srm_pvalue, higher_is_better={"bounce": False}
     )
-    insights, _ = generate_insights(results, decision, use_llm=False)
+    insights, _, _ = generate_insights(results, decision, use_llm=False)
     report = markdown_report("Checkout redesign", data, results, decision, cfg, insights)
     (ROOT / "docs" / "generated_experiment_review.md").write_text(report, encoding="utf-8")
 

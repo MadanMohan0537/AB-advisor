@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 
 import pandas as pd
 import streamlit as st
@@ -140,8 +141,25 @@ def _analyze_tab() -> None:
         st.caption(f"Beta({beta_alpha:.2f}, {beta_beta:.2f})")
 
         st.header("Narrative")
-        use_llm = st.checkbox("Rewrite summary with OpenAI if API key is set", value=False)
-        api_key = st.text_input("OpenAI API key", type="password", help="Optional. Leave blank for templates.")
+        provider = st.selectbox(
+            "LLM provider",
+            ["deepseek", "openai", "off"],
+            index=0,
+            help="DeepSeek is the default. Choose off to keep the deterministic template.",
+        )
+        default_model = "deepseek-v4-flash" if provider != "openai" else "gpt-4o-mini"
+        llm_model = st.text_input(
+            "Model",
+            value=os.environ.get("DEEPSEEK_MODEL") or os.environ.get("OPENAI_MODEL") or default_model,
+        )
+        api_key = st.text_input(
+            "API key",
+            type="password",
+            help="Paste a DeepSeek key (platform.deepseek.com). Leave blank to use DEEPSEEK_API_KEY from the environment.",
+        )
+        use_llm = provider != "off"
+        if use_llm and not (api_key or os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY")):
+            st.caption("No key yet — the template will be used until DEEPSEEK_API_KEY is set.")
 
     try:
         raw = _load_frame(sample_choice, uploaded)
@@ -251,8 +269,14 @@ def _analyze_tab() -> None:
             srm_pvalue=data.srm_pvalue,
             higher_is_better=hib,
         )
-        insights, source = generate_insights(
-            results, decision, cred_mass=config.cred_mass, use_llm=use_llm, api_key=api_key or None
+        insights, source, llm_error = generate_insights(
+            results,
+            decision,
+            cred_mass=config.cred_mass,
+            use_llm=use_llm,
+            api_key=api_key or None,
+            provider=None if provider == "off" else provider,
+            model=llm_model or None,
         )
         st.session_state["analysis"] = {
             "data": data,
@@ -260,6 +284,7 @@ def _analyze_tab() -> None:
             "decision": decision,
             "insights": insights,
             "source": source,
+            "llm_error": llm_error,
             "config": config,
             "experiment_name": experiment_name,
             "hib": hib,
@@ -298,7 +323,15 @@ def _analyze_tab() -> None:
 
     st.subheader("Narrative")
     src = payload["source"]
-    st.caption("LLM rewrite" if src == "llm" else "Template summary (deterministic, no API key required)")
+    if src.startswith("llm"):
+        st.caption(f"DeepSeek / LLM rewrite ({src})")
+    elif src == "template_fallback":
+        st.caption("Template summary — LLM rewrite failed")
+        err = payload.get("llm_error")
+        if err:
+            st.warning(f"Could not reach the LLM: {err}")
+    else:
+        st.caption("Template summary (deterministic, no API key required)")
     st.markdown(payload["insights"])
 
     st.subheader("Per-metric posteriors")

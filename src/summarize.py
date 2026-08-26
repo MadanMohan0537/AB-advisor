@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import os
 from typing import Any
@@ -149,6 +150,80 @@ Hard rules:
 - Do not claim causality beyond the randomized assignment implied by the experiment.
 """
 
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-flash"
+OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
+
+
+@dataclass
+class LLMSettings:
+    provider: str
+    api_key: str
+    model: str
+    base_url: str | None = None
+    extra_body: dict[str, Any] | None = None
+
+
+def resolve_llm_settings(
+    api_key: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
+) -> LLMSettings | None:
+    """Prefer DeepSeek. Fall back to OpenAI only if that is the key that is set."""
+    provider = (provider or os.environ.get("LLM_PROVIDER") or "").strip().lower()
+    env_deepseek = os.environ.get("DEEPSEEK_API_KEY") or ""
+    env_openai = os.environ.get("OPENAI_API_KEY") or ""
+    key = (api_key or env_deepseek or env_openai or "").strip()
+    if not key:
+        return None
+    if not provider:
+        if api_key:
+            provider = "deepseek"
+        elif env_deepseek:
+            provider = "deepseek"
+        else:
+            provider = "openai"
+
+    if provider in {"deepseek", "ds"}:
+        chosen_model = model or os.environ.get("DEEPSEEK_MODEL") or os.environ.get("LLM_MODEL") or DEEPSEEK_DEFAULT_MODEL
+        extra = {"thinking": {"type": "disabled"}} if "v4" in chosen_model else None
+        return LLMSettings(
+            provider="deepseek",
+            api_key=key,
+            model=chosen_model,
+            base_url=base_url or os.environ.get("DEEPSEEK_BASE_URL") or DEEPSEEK_BASE_URL,
+            extra_body=extra,
+        )
+    chosen_model = model or os.environ.get("OPENAI_MODEL") or os.environ.get("LLM_MODEL") or OPENAI_DEFAULT_MODEL
+    return LLMSettings(
+        provider="openai",
+        api_key=key,
+        model=chosen_model,
+        base_url=base_url or os.environ.get("OPENAI_BASE_URL"),
+        extra_body=None,
+    )
+
+
+def _message_text(message: Any) -> str | None:
+    content = getattr(message, "content", None)
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("text"):
+                parts.append(str(block["text"]))
+            else:
+                text = getattr(block, "text", None)
+                if text:
+                    parts.append(str(text))
+        joined = "".join(parts).strip()
+        return joined or None
+    return None
+
 
 def llm_enhance(
     results: list[PosteriorResult],
@@ -156,39 +231,45 @@ def llm_enhance(
     cred_mass: float = 0.90,
     model: str | None = None,
     api_key: str | None = None,
-) -> str | None:
-    """Optional OpenAI rewrite. Returns None if no key or the call fails."""
-    key = api_key or os.environ.get("OPENAI_API_KEY")
-    if not key:
-        return None
+    provider: str | None = None,
+    base_url: str | None = None,
+) -> tuple[str | None, str | None, LLMSettings | None]:
+    """Optional DeepSeek (or OpenAI-compatible) rewrite. Returns (text, error, settings)."""
+    settings = resolve_llm_settings(api_key=api_key, provider=provider, model=model, base_url=base_url)
+    if settings is None:
+        return None, None, None
     try:
         from openai import OpenAI
     except Exception:
-        return None
+        return None, "The openai package is not installed.", settings
 
-    model = model or os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
     payload = _stats_payload(results, decision, cred_mass)
+    kwargs: dict[str, Any] = {
+        "model": settings.model,
+        "temperature": 0.2,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    "Write the experiment review from this JSON. "
+                    "If any number is missing, say so rather than guessing.\n\n"
+                    + json.dumps(payload, indent=2)
+                ),
+            },
+        ],
+    }
+    if settings.extra_body:
+        kwargs["extra_body"] = settings.extra_body
     try:
-        client = OpenAI(api_key=key)
-        response = client.chat.completions.create(
-            model=model,
-            temperature=0.2,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": (
-                        "Write the experiment review from this JSON. "
-                        "If any number is missing, say so rather than guessing.\n\n"
-                        + json.dumps(payload, indent=2)
-                    ),
-                },
-            ],
-        )
-        text = response.choices[0].message.content
-        return text.strip() if text else None
-    except Exception:
-        return None
+        client = OpenAI(api_key=settings.api_key, base_url=settings.base_url)
+        response = client.chat.completions.create(**kwargs)
+        text = _message_text(response.choices[0].message)
+        if not text:
+            return None, "The model returned an empty message.", settings
+        return text, None, settings
+    except Exception as exc:
+        return None, str(exc), settings
 
 
 def generate_insights(
@@ -198,11 +279,25 @@ def generate_insights(
     use_llm: bool = True,
     model: str | None = None,
     api_key: str | None = None,
-) -> tuple[str, str]:
-    """Return (display_markdown, source) where source is 'llm' or 'template'."""
+    provider: str | None = None,
+    base_url: str | None = None,
+) -> tuple[str, str, str | None]:
+    """Return (display_markdown, source, error). source is llm / template / template_fallback."""
     template = experiment_template(results, decision, cred_mass)
-    if use_llm:
-        rewritten = llm_enhance(results, decision, cred_mass, model=model, api_key=api_key)
-        if rewritten:
-            return rewritten, "llm"
-    return template, "template"
+    if not use_llm:
+        return template, "template", None
+    rewritten, error, settings = llm_enhance(
+        results,
+        decision,
+        cred_mass,
+        model=model,
+        api_key=api_key,
+        provider=provider,
+        base_url=base_url,
+    )
+    if rewritten:
+        label = f"llm:{settings.provider}" if settings else "llm"
+        return rewritten, label, None
+    if error:
+        return template, "template_fallback", error
+    return template, "template", None

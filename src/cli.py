@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from src.bayesian import AnalysisConfig, analyze_metric
@@ -19,6 +20,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--mde", type=float, default=0.02)
     parser.add_argument("--cred", type=float, default=0.90)
+    parser.add_argument("--llm", action="store_true", help="Rewrite narrative with DeepSeek if DEEPSEEK_API_KEY is set")
     args = parser.parse_args()
 
     data = load_experiment(str(args.csv))
@@ -28,7 +30,11 @@ def main() -> None:
         for name in data.metric_cols
     ]
     decision = decide_experiment(results, srm_flag=data.srm_flag, srm_pvalue=data.srm_pvalue)
-    insights, _ = generate_insights(results, decision, cred_mass=config.cred_mass, use_llm=False)
+    insights, source, error = generate_insights(
+        results, decision, cred_mass=config.cred_mass, use_llm=args.llm, provider="deepseek"
+    )
+    if error:
+        print(f"LLM rewrite failed ({source}): {error}", file=sys.stderr)
     report = markdown_report(args.name, data, results, decision, config, insights)
     if args.out:
         args.out.write_text(report, encoding="utf-8")

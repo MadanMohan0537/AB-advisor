@@ -48,6 +48,7 @@ def test_template_contains_actual_probability():
     assert f"{result.prob_improvement:.1%}".replace("%", "") in text.replace("%", "")
     full = experiment_template([result], decide_experiment([result]))
     assert "Recommendation" in full
-    md, source = generate_insights([result], decide_experiment([result]), use_llm=False)
+    md, source, err = generate_insights([result], decide_experiment([result]), use_llm=False)
     assert source == "template"
+    assert err is None
     assert "converted" in md

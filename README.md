@@ -40,7 +40,16 @@ python -m src.cli data/sample_experiment.csv --name "Checkout redesign" --out do
 pytest -q
 ```
 
-Optional LLM rewrite of the narrative: set `OPENAI_API_KEY` (or paste it in the sidebar). The model only sees the computed JSON. If the key is missing, a deterministic template is used — numbers never depend on the LLM.
+Optional LLM rewrite of the narrative uses **DeepSeek** (OpenAI-compatible). Set `DEEPSEEK_API_KEY` or paste the key in the sidebar. The model only sees the computed JSON. If the key is missing, a deterministic template is used — numbers never depend on the LLM.
+
+```bash
+export DEEPSEEK_API_KEY=sk-...
+streamlit run app.py
+# or
+python -m src.cli data/sample_experiment.csv --name "Checkout redesign" --llm
+```
+
+Defaults: `https://api.deepseek.com` and `deepseek-v4-flash` (thinking disabled so the brief stays tight). Override with `DEEPSEEK_MODEL` or the Model field in the sidebar. OpenAI remains available if you switch the provider dropdown.
 
 ## Input format
 
@@ -111,7 +120,7 @@ app.py                 Streamlit UI
 src/bayesian.py        Conjugate posteriors + Monte Carlo summaries
 src/metrics.py         Wide/long loaders, type detection, SRM check
 src/decisions.py       Ship / hold / keep-running / investigate
-src/summarize.py       Templates + optional OpenAI rewrite
+src/summarize.py       Templates + optional DeepSeek rewrite
 src/visualize.py       Plotly posteriors, lift, forest, gauges
 src/report.py          Markdown/HTML experiment review + sample size
 src/data_gen.py        Synthetic checkout + underpowered datasets
