@@ -2,6 +2,10 @@
 
 **Bayesian A/B test analyzer for product decisions.**
 
+[![CI](https://github.com/MadanMohan0537/AB-advisor/actions/workflows/ci.yml/badge.svg)](https://github.com/MadanMohan0537/AB-advisor/actions/workflows/ci.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Upload experiment data (user IDs, variant assignment, metrics). AB Advisor fits conjugate Bayesian models per metric and turns the posteriors into something a launch review can actually use:
 
 > There is a **99.9%** probability the new checkout increases conversion, with an expected lift of **+24%**. The 90% highest-density interval is **[+17%, +32%]** — it does not include zero. Expected loss if you ship is tiny compared with holding.
@@ -57,6 +61,8 @@ python -m src.cli data/sample_experiment.csv --name "Checkout redesign" --llm
 Default endpoint `https://api.deepseek.com`, default model `deepseek-v4-flash` (thinking disabled, to keep the brief tight). Override with `DEEPSEEK_MODEL` or the sidebar's model field. Set `OPENAI_API_KEY` (and optionally `LLM_PROVIDER=openai`) to use OpenAI instead.
 
 ## Input format
+
+AB Advisor deliberately rejects unsafe inputs before fitting a model: the file must contain exactly two distinct arms, every user must belong to only one arm, wide data must have one row per user, the expected traffic split must be valid, and each analyzed metric must have usable observations in both arms. Missing metric values are dropped independently within each arm; infinite values are rejected.
 
 **Wide** — one row per user:
 
@@ -206,8 +212,8 @@ Run `python -m src.cli data/sample_experiment.csv --name "Checkout redesign"` to
 pytest -q
 ```
 
-25 tests covering: a known conversion lift resolving to P(better) → 1, a true null resolving to an HDI that contains 0, Poisson rates, the hurdle revenue model, long-format CSV ingestion, SRM detection, the ship/hold/keep-running/investigate decision rules, and the LLM fallback path when no key is configured.
+33 tests covering: a known conversion lift resolving to P(better) → 1, a true null resolving to an HDI that contains 0, Poisson rates, the hurdle revenue model, long-format CSV ingestion, malformed-input rejection, missing-value handling, SRM detection, the ship/hold/keep-running/investigate decision rules, and the LLM fallback path when no key is configured. GitHub Actions runs the suite on Python 3.10, 3.11, and 3.12 for every push and pull request.
 
 ## License
 
-No license file is included yet — add one (MIT is a reasonable default for a portfolio project like this) before treating the repo as open for external reuse.
+Released under the [MIT License](LICENSE).

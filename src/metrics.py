@@ -34,9 +34,13 @@ class ExperimentData:
     types: dict[str, MetricType] = field(default_factory=dict)
 
     def split(self, metric: str) -> tuple[np.ndarray, np.ndarray]:
+        if metric not in self.metric_cols:
+            raise KeyError(f"Unknown metric: {metric}")
         df = self.frame
-        control = df.loc[df[self.variant_col] == self.control_label, metric].to_numpy(dtype=float)
-        treatment = df.loc[df[self.variant_col] == self.treatment_label, metric].to_numpy(dtype=float)
+        control = df.loc[df[self.variant_col] == self.control_label, metric].dropna().to_numpy(dtype=float)
+        treatment = df.loc[df[self.variant_col] == self.treatment_label, metric].dropna().to_numpy(dtype=float)
+        if control.size == 0 or treatment.size == 0:
+            raise ValueError(f"Metric '{metric}' must contain at least one value in each arm.")
         return control, treatment
 
 
@@ -123,6 +127,12 @@ def load_experiment(
     srm_threshold: float = 0.001,
 ) -> ExperimentData:
     df = pd.read_csv(source) if isinstance(source, str) else source.copy()
+    if df.empty:
+        raise ValueError("The experiment dataset is empty.")
+    if not 0 < expected_split < 1:
+        raise ValueError("expected_split must be strictly between 0 and 1.")
+    if not 0 < srm_threshold < 1:
+        raise ValueError("srm_threshold must be strictly between 0 and 1.")
     df.columns = [str(c).strip() for c in df.columns]
     columns = list(df.columns)
 
@@ -143,6 +153,10 @@ def load_experiment(
 
     df[variant_col] = df[variant_col].map(_normalize_variant)
     labels = [str(v) for v in df[variant_col].dropna().unique()]
+    if len(labels) != 2:
+        raise ValueError(
+            f"Expected exactly two experiment variants, found {len(labels)}: {labels or 'none'}."
+        )
     if control_label:
         control_label = _normalize_variant(control_label)
     if treatment_label:
@@ -152,6 +166,20 @@ def load_experiment(
     if treatment_label is None:
         treatment_label = "treatment" if "treatment" in labels else next(
             (lab for lab in labels if lab != control_label), labels[-1]
+        )
+    if control_label == treatment_label or control_label not in labels or treatment_label not in labels:
+        raise ValueError(
+            f"Control and treatment must be distinct labels present in the data; found {labels}."
+        )
+
+    assignments = df[[user_col, variant_col]].dropna().drop_duplicates()
+    cross_arm_users = assignments.groupby(user_col, dropna=False)[variant_col].nunique()
+    if (cross_arm_users > 1).any():
+        examples = cross_arm_users[cross_arm_users > 1].index.astype(str).tolist()[:5]
+        raise ValueError(
+            "Users assigned to multiple variants were found (for example: "
+            + ", ".join(examples)
+            + "). Fix assignment data before analysis."
         )
 
     reserved = {user_col, variant_col}
@@ -165,7 +193,20 @@ def load_experiment(
         raise ValueError("No numeric metric columns found.")
 
     for col in metric_cols:
+        if col not in df.columns:
+            raise ValueError(f"Metric column not found: {col}")
         df[col] = pd.to_numeric(df[col], errors="coerce")
+        if not np.isfinite(df[col].dropna().to_numpy(dtype=float)).all():
+            raise ValueError(f"Metric '{col}' contains infinite values.")
+
+    duplicate_rows = df.duplicated(subset=[user_col, variant_col], keep=False)
+    if duplicate_rows.any():
+        duplicates = df.loc[duplicate_rows, user_col].astype(str).unique().tolist()[:5]
+        raise ValueError(
+            "Duplicate user rows found in wide-format data (for example: "
+            + ", ".join(duplicates)
+            + "). Aggregate to one row per user before analysis."
+        )
 
     n_control = int((df[variant_col] == control_label).sum())
     n_treatment = int((df[variant_col] == treatment_label).sum())
